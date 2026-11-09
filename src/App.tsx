@@ -1590,6 +1590,23 @@ function FunctionalExploreScreen({ onNavigate }: { onNavigate: (s: Screen, d?: u
   const serviceableSellers = SELLERS.filter((seller) => sellerDeliversTo(seller, deliveryLocation));
   const normalizedQuery = exploreState.query.trim().toLowerCase();
 
+  const matchingSellers = useMemo(() => {
+    return serviceableSellers.filter((seller) => {
+      const searchable = [seller.name, seller.tagline, seller.cuisine, ...seller.coverageAreas, ...seller.dietary].join(" ").toLowerCase();
+      if (normalizedQuery && !searchable.includes(normalizedQuery)) {
+        const hasMatchingMeal = MEALS.some((m) => m.sellerId === seller.id && [m.name, m.description, m.cuisine, ...m.labels].join(" ").toLowerCase().includes(normalizedQuery));
+        if (!hasMatchingMeal) return false;
+      }
+      if (exploreState.cuisines.length && !exploreState.cuisines.some((c) => seller.cuisine.toLowerCase().includes(c.toLowerCase()))) return false;
+      if (exploreState.diets.length && !exploreState.diets.every((d) => seller.dietary.some((label) => label.toLowerCase() === d.toLowerCase()))) return false;
+      return true;
+    }).sort((a, b) => {
+      if (exploreState.sort === "Price: Low to High") return a.price - b.price;
+      if (exploreState.sort === "Price: High to Low") return b.price - a.price;
+      return b.rating - a.rating;
+    });
+  }, [exploreState, normalizedQuery, serviceableSellers]);
+
   const matchingMeals = useMemo(() => {
     const filtered = MEALS.filter((meal) => {
       const seller = SELLERS.find((item) => item.id === meal.sellerId);
@@ -1610,6 +1627,22 @@ function FunctionalExploreScreen({ onNavigate }: { onNavigate: (s: Screen, d?: u
     });
   }, [exploreState, normalizedQuery, serviceableSellers]);
 
+  const visiblePlans = useMemo(() => {
+    return PLAN_OPTIONS.filter((plan) => {
+      const seller = serviceableSellers.find((s) => s.id === plan.sellerId);
+      if (!seller) return false;
+      if (exploreState.plan !== "All" && plan.duration !== exploreState.plan) return false;
+      if (normalizedQuery && ![plan.name, seller.name, seller.cuisine].join(" ").toLowerCase().includes(normalizedQuery)) return false;
+      return true;
+    });
+  }, [exploreState.plan, normalizedQuery, serviceableSellers]);
+
+  const activeFilterCount =
+    exploreState.cuisines.length +
+    exploreState.diets.length +
+    exploreState.mealTypes.length +
+    (exploreState.plan !== "All" ? 1 : 0);
+
   const addMeal = (meal: Meal) => {
     setCart((current) => addItemToCart(current, { mealId: meal.id, quantity: 1 }));
     showToast(`Added "${meal.name}" to your tiffin!`);
@@ -1617,45 +1650,73 @@ function FunctionalExploreScreen({ onNavigate }: { onNavigate: (s: Screen, d?: u
 
   return (
     <div className="flex-1 overflow-y-auto bg-background pb-28">
-      <div className="explore-container px-4 pt-4">
-        <header className="explore-header flex items-center justify-between pb-3">
+      <div className="explore-container">
+        <header className="explore-header">
           <div className="explore-title-block">
-            <h1 className="font-display text-2xl font-bold">Discover Ahmedabad Tiffins</h1>
-            <button onClick={() => onNavigate("location")} className="explore-location text-xs font-semibold text-accent flex items-center gap-1 mt-0.5">
+            <h1 className="font-display text-2xl font-bold tracking-tight text-foreground">Discover</h1>
+            <button
+              onClick={() => onNavigate("location")}
+              className="explore-location"
+            >
               <MapPinIcon size={12} color="var(--accent)" />
               <span>Delivering to <strong>{deliveryLocation.locality}</strong> ▾</span>
             </button>
           </div>
           {cart.length > 0 && (
-            <button onClick={() => onNavigate("cart")} className="explore-cart-button px-3 py-1.5 rounded-full bg-accent text-white text-xs font-bold active:scale-95 transition-all">
-              Cart ({cartItemCount(cart)})
+            <button
+              onClick={() => onNavigate("cart")}
+              className="explore-cart-button"
+            >
+              <BagIcon size={14} color="#1C1917" />
+              <span>Cart ({cartItemCount(cart)})</span>
             </button>
           )}
         </header>
 
-        <div className="explore-toolbar mb-3">
-          <div className="explore-search flex items-center gap-2 px-3 py-2.5 rounded-2xl border border-border bg-card">
+        <div className="explore-toolbar">
+          <div className="explore-search">
             <SearchIcon size={16} color="var(--muted-foreground)" />
             <input
               value={exploreState.query}
               onChange={(e) => setExploreState((c) => ({ ...c, query: e.target.value }))}
-              placeholder="Search thalis, rotli, sabzi, kitchens…"
-              className="flex-1 bg-transparent text-sm outline-none"
+              placeholder="Search thalis, rotli, sabzi or kitchens…"
+              className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
             {exploreState.query && (
-              <button onClick={() => setExploreState((c) => ({ ...c, query: "" }))} className="text-xs text-muted-foreground p-1">✕</button>
+              <button
+                onClick={() => setExploreState((c) => ({ ...c, query: "" }))}
+                aria-label="Clear search"
+                className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center text-xs text-muted-foreground hover:text-foreground active:scale-90"
+              >
+                ✕
+              </button>
             )}
           </div>
         </div>
 
-        <div className="meal-type-strip flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-          {["All food", "Gujarati", "North Indian", "Jain"].map((type) => {
-            const active = type === "All food" ? exploreState.cuisines.length === 0 : exploreState.cuisines.includes(type);
+        <div className="meal-type-strip">
+          {["All food", "Gujarati", "North Indian", "Jain", "Healthy"].map((type) => {
+            const active = type === "All food"
+              ? exploreState.cuisines.length === 0 && !exploreState.diets.includes("Healthy")
+              : type === "Healthy"
+              ? exploreState.diets.includes("Healthy")
+              : exploreState.cuisines.includes(type);
             return (
               <button
                 key={type}
-                onClick={() => setExploreState((c) => ({ ...c, cuisines: type === "All food" ? [] : [type] }))}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all whitespace-nowrap active:scale-95 ${active ? "bg-primary border-primary text-stone-900" : "bg-card border-border text-muted-foreground"}`}
+                onClick={() => {
+                  if (type === "All food") {
+                    setExploreState((c) => ({ ...c, cuisines: [], diets: c.diets.filter((d) => d !== "Healthy") }));
+                  } else if (type === "Healthy") {
+                    setExploreState((c) => ({
+                      ...c,
+                      diets: c.diets.includes("Healthy") ? c.diets.filter((d) => d !== "Healthy") : [...c.diets, "Healthy"],
+                    }));
+                  } else {
+                    setExploreState((c) => ({ ...c, cuisines: c.cuisines.includes(type) ? [] : [type] }));
+                  }
+                }}
+                className={active ? "active" : ""}
               >
                 {type}
               </button>
@@ -1663,65 +1724,192 @@ function FunctionalExploreScreen({ onNavigate }: { onNavigate: (s: Screen, d?: u
           })}
           <button
             onClick={() => { setDraft(exploreState); setShowFilters(true); }}
-            className="px-3 py-1.5 rounded-full text-xs font-bold border border-border bg-card text-muted-foreground whitespace-nowrap ml-auto flex items-center gap-1 active:scale-95"
+            className={`filter-chip-btn ${activeFilterCount > 0 ? "active" : ""}`}
           >
             <span>Filters</span>
-            {exploreState.diets.length > 0 && <span className="w-2 h-2 rounded-full bg-accent inline-block" />}
+            {activeFilterCount > 0 && (
+              <span className="w-4 h-4 rounded-full bg-amber-400 text-stone-950 text-[10px] font-extrabold flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
           </button>
         </div>
 
-        {/* Meal cards list */}
-        <div className="mt-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              {matchingMeals.length} Fresh Meals Available
-            </p>
+        <div className="explore-result-row">
+          <p className="text-xs font-bold text-muted-foreground">
+            {matchingSellers.length} kitchen{matchingSellers.length === 1 ? "" : "s"} · {matchingMeals.length} fresh meal{matchingMeals.length === 1 ? "" : "s"}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-muted-foreground font-semibold">Sort:</span>
             <select
               value={exploreState.sort}
               onChange={(e) => setExploreState((c) => ({ ...c, sort: e.target.value as ExploreState["sort"] }))}
-              className="text-xs font-semibold bg-transparent border border-border rounded-lg px-2 py-1 outline-none"
+              aria-label="Sort options"
             >
               <option>Recommended</option>
               <option>Price: Low to High</option>
               <option>Price: High to Low</option>
             </select>
           </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            {matchingMeals.map((meal) => (
-              <div key={meal.id} className="p-3.5 rounded-2xl border border-border bg-card shadow-2xs flex flex-col justify-between">
-                <div className="flex gap-3">
-                  <img src={meal.image} alt={meal.name} className="w-20 h-20 rounded-xl object-cover shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-1">
-                      <h3 className="font-bold text-sm text-foreground truncate">{meal.name}</h3>
-                      <VegBadge small />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{meal.kitchen}</p>
-                    <p className="text-[11px] text-muted-foreground mt-1 line-clamp-1">{meal.description}</p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-border/60">
-                  <span className="font-extrabold text-base text-foreground">₹{meal.price}</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onNavigate("meal-detail", { mealId: meal.id })}
-                      className="px-3 py-1 rounded-xl text-xs font-bold border border-border bg-secondary hover:bg-secondary/80 active:scale-95 transition-all"
-                    >
-                      View
-                    </button>
-                    <button
-                      onClick={() => addMeal(meal)}
-                      className="px-3.5 py-1 rounded-xl text-xs font-bold bg-primary text-stone-900 active:scale-95 transition-all shadow-2xs"
-                    >
-                      + Add
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
+
+        {/* Section 1: Kitchens / Centers */}
+        {matchingSellers.length > 0 && (
+          <section className="explore-section">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Local Dabba Partners</p>
+                <h2>Trusted Home Kitchens</h2>
+              </div>
+            </div>
+            <div className="provider-grid">
+              {matchingSellers.map((seller) => (
+                <button
+                  key={seller.id}
+                  onClick={() => onNavigate("seller-profile", { sellerId: seller.id })}
+                  className="provider-discovery-card"
+                >
+                  <img src={seller.img} alt={seller.name} />
+                  <div className="min-w-0 flex-1 text-left">
+                    <div className="flex items-center gap-1">
+                      <strong className="block truncate text-sm font-bold text-foreground">{seller.name}</strong>
+                      {seller.verified && (
+                        <span className="text-[10px] font-bold text-accent shrink-0">✓</span>
+                      )}
+                    </div>
+                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">{seller.cuisine} · {seller.delivery}</span>
+                    <div className="mt-1 flex items-center justify-between">
+                      <span className="provider-price">From ₹{seller.price}</span>
+                      <span className="text-xs font-semibold text-muted-foreground">{seller.distance}</span>
+                    </div>
+                  </div>
+                  <span className="provider-rating">★ {seller.rating}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Section 2: Homemade Meals & Thalis */}
+        {matchingMeals.length > 0 && (
+          <section className="explore-section">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Fresh Today</p>
+                <h2>Homemade Meals & Thalis</h2>
+              </div>
+              <span className="text-xs font-bold text-muted-foreground">{matchingMeals.length} items</span>
+            </div>
+            <div className="meal-grid">
+              {matchingMeals.map((meal) => {
+                const inCart = cart.find((item) => item.mealId === meal.id);
+                const seller = SELLERS.find((item) => item.id === meal.sellerId);
+                return (
+                  <article key={meal.id} className="meal-discovery-card">
+                    <div
+                      onClick={() => onNavigate("meal-detail", { mealId: meal.id })}
+                      className="meal-card-main cursor-pointer"
+                    >
+                      <div className="relative shrink-0">
+                        <img src={meal.image} alt={meal.name} />
+                        <div className="absolute top-1.5 left-1.5">
+                          <VegBadge small />
+                        </div>
+                        {!meal.available && <span className="availability-pill unavailable">Sold Out</span>}
+                      </div>
+                      <div className="min-w-0 flex-1 text-left">
+                        <p className="text-[11px] font-semibold text-muted-foreground truncate">{meal.kitchen}</p>
+                        <h3 className="mt-0.5 font-bold text-sm text-foreground truncate">{meal.name}</h3>
+                        <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{meal.description}</p>
+                        <div className="mt-2 flex items-center justify-between gap-1">
+                          <span className="font-extrabold text-sm text-foreground">₹{meal.price}</span>
+                          <span className="text-[10px] font-bold text-accent bg-accent/10 px-2 py-0.5 rounded-md uppercase tracking-wider">{meal.mealType}</span>
+                        </div>
+                      </div>
+                      {seller && <span className="provider-rating">★ {seller.rating}</span>}
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-border/60">
+                      <button
+                        onClick={() => onNavigate("meal-detail", { mealId: meal.id })}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold border border-border bg-secondary hover:bg-secondary/80 active:scale-95 transition-all text-foreground"
+                      >
+                        View
+                      </button>
+                      <button
+                        disabled={!meal.available}
+                        onClick={() => addMeal(meal)}
+                        className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-primary text-stone-900 active:scale-95 transition-all shadow-2xs hover:brightness-105 disabled:opacity-40"
+                      >
+                        {inCart ? `+ Add Another (${inCart.quantity})` : "+ Add to Tiffin"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Section 3: Subscription Plans */}
+        {visiblePlans.length > 0 && (
+          <section className="explore-section">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Dabba Subscription</p>
+                <h2>Daily, Weekly & Monthly Plans</h2>
+              </div>
+            </div>
+            <div className="plan-grid">
+              {visiblePlans.map((plan) => {
+                const meal = MEALS.find((item) => item.id === plan.mealId);
+                return (
+                  <article key={plan.id} className="plan-discovery-card flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold uppercase tracking-wider text-accent">{plan.duration} Plan</span>
+                        <span className="text-xs font-semibold text-muted-foreground">{plan.meals} Meals</span>
+                      </div>
+                      <h3 className="mt-1 font-bold text-base text-foreground">{plan.name}</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{meal ? meal.kitchen : "Authentic Kitchen"}</p>
+                    </div>
+                    <div className="mt-4 flex items-end justify-between gap-3 pt-3 border-t border-border/60">
+                      <div>
+                        <strong className="text-lg font-extrabold text-foreground">₹{plan.price}</strong>
+                        <span className="block text-[10px] text-muted-foreground font-semibold">₹{Math.round(plan.price / plan.meals)} / meal</span>
+                      </div>
+                      <button
+                        onClick={() => onNavigate("plans")}
+                        className="min-h-[38px] rounded-xl bg-accent px-4 text-xs font-bold text-white hover:brightness-110 active:scale-95 transition-all shadow-xs"
+                      >
+                        View Plan →
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* Empty State */}
+        {matchingMeals.length === 0 && matchingSellers.length === 0 && (
+          <div className="explore-empty">
+            <div className="w-14 h-14 rounded-2xl bg-secondary flex items-center justify-center mx-auto text-2xl">
+              🍱
+            </div>
+            <h2 className="mt-3 text-lg font-bold text-foreground">No matches found</h2>
+            <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
+              We couldn't find any tiffins or kitchens matching your filters. Try clearing your search or filters.
+            </p>
+            <button
+              onClick={() => setExploreState(DEFAULT_EXPLORE_STATE)}
+              className="mt-4 min-h-[44px] rounded-2xl bg-primary px-6 text-xs font-bold text-stone-900 shadow-xs active:scale-95 transition-all"
+            >
+              Reset All Filters
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filter Modal */}
@@ -1742,9 +1930,63 @@ function FunctionalExploreScreen({ onNavigate }: { onNavigate: (s: Screen, d?: u
                       <button
                         key={d}
                         onClick={() => setDraft((c) => ({ ...c, diets: active ? c.diets.filter((x) => x !== d) : [...c.diets, d] }))}
-                        className={`px-3 py-1.5 rounded-full text-xs font-bold border ${active ? "bg-accent text-white border-accent" : "bg-card border-border"}`}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${active ? "bg-accent text-white border-accent" : "bg-card border-border text-foreground"}`}
                       >
                         {d}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Cuisine</p>
+                <div className="flex flex-wrap gap-2">
+                  {["Gujarati", "North Indian", "Kathiyawadi", "Home Food"].map((c) => {
+                    const active = draft.cuisines.includes(c);
+                    return (
+                      <button
+                        key={c}
+                        onClick={() => setDraft((prev) => ({ ...prev, cuisines: active ? prev.cuisines.filter((x) => x !== c) : [...prev.cuisines, c] }))}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${active ? "bg-primary border-primary text-stone-900" : "bg-card border-border text-foreground"}`}
+                      >
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Meal Type</p>
+                <div className="flex flex-wrap gap-2">
+                  {(["Lunch", "Dinner"] as const).map((mt) => {
+                    const active = draft.mealTypes.includes(mt);
+                    return (
+                      <button
+                        key={mt}
+                        onClick={() => setDraft((prev) => ({ ...prev, mealTypes: active ? prev.mealTypes.filter((x) => x !== mt) : [...prev.mealTypes, mt] }))}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${active ? "bg-accent text-white border-accent" : "bg-card border-border text-foreground"}`}
+                      >
+                        {mt}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Plan Type</p>
+                <div className="flex flex-wrap gap-2">
+                  {(["All", "Daily", "Weekly", "Monthly"] as const).map((p) => {
+                    const active = draft.plan === p;
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => setDraft((prev) => ({ ...prev, plan: p }))}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${active ? "bg-foreground text-background border-foreground" : "bg-card border-border text-foreground"}`}
+                      >
+                        {p}
                       </button>
                     );
                   })}
@@ -1753,7 +1995,7 @@ function FunctionalExploreScreen({ onNavigate }: { onNavigate: (s: Screen, d?: u
             </div>
             <div className="flex gap-2 pt-3 border-t border-border">
               <SecondaryButton label="Clear Filters" onClick={() => setDraft(DEFAULT_EXPLORE_STATE)} />
-              <PrimaryButton label="Apply" onClick={() => { setExploreState(draft); setShowFilters(false); }} />
+              <PrimaryButton label="Apply Filters" onClick={() => { setExploreState(draft); setShowFilters(false); }} />
             </div>
           </div>
         </div>
